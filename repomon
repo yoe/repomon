@@ -1,0 +1,170 @@
+#!/usr/bin/perl -w
+#x3.out.filter=^be\.fedict\.eid\.ext\.middleware\.download\.linux\.([a-z0-9_-]+)\.(state|state\.comment)$
+
+my $BASEURL = 'http://files.eid.belgium.be/';
+my $DEBURL = "${BASEURL}debian/";
+my $RPMURL = "${BASEURL}rpm/";
+my $RESULTPREFIX='be.fedict.eid.ext.middleware.download.linux';
+
+my @debrepos = ( 'wheezy', 'trusty', 'precise', 'qiana', 'maya' );
+my %rpmrepos = (
+	'fedora'	=> { vers => [ 19, 20 ], arch => [ 'i386', 'x86_64' ], gpg => 'n' },
+	'epel'		=> { vers => [ 6 ], arch => ['i386', 'x86_64' ], gpg => 'n' },
+	'opensuse'	=> { vers => [ 131 ], arch => [ '' ], gpg => 'y' },
+);
+
+my %states = ( OK => 0, WARNING => 1, ALERT => 2, MISSING => 3 );
+
+use strict;
+use warnings;
+
+use LWP::UserAgent;
+use Digest::SHA qw(sha1_hex);
+
+package repomon::ua;
+our @ISA = "LWP::UserAgent";
+
+sub set_x3_sizes() {
+	my $self = shift;
+	my $sizes = shift;
+	$self->{x3_sizes} = $sizes;
+	my $total = 0;
+	my $inc = [];
+	foreach my $size(@$sizes) {
+		push @$inc, $total;
+		$total += $size;
+	}
+	$self->{x3_total_size} = $total;
+	$self->{x3_inc_sizes} = $inc;
+}
+
+sub set_x3_which() {
+	my $self = shift;
+	$self->{x3_which} = shift;
+}
+
+sub set_x3_dist() {
+	my $self = shift;
+	$self->{x3_dist} = shift;
+}
+
+sub progress() {
+	my $self = shift;
+	return unless defined($self->show_progress) && $self->show_progress > 0;
+	my $status = shift;
+	my $request_or_response = shift;
+	if($status eq "begin") {
+		$status = 0;
+	} elsif ($status eq "end") {
+		$status = 1;
+	}
+	my $incsize = $self->{x3_inc_sizes}[$self->{x3_which}];
+	my $fileloc = $self->{x3_sizes}[$self->{x3_which}] * $status;
+	my $curloc = $incsize + $fileloc;
+	$status = $curloc / $self->{x3_total_size};
+	$status = int($status * 100);
+	main::printresult($self->{x3_dist}, "progress", $status);
+}
+
+package main;
+
+my $ua = repomon::ua->new;
+$ua->env_proxy;
+
+sub printresult($$$) {
+	my $dist = shift;
+	my $sub = shift;
+	my $value = shift;
+
+	print "${RESULTPREFIX}.${dist}.${sub}: $value\n";
+}
+
+sub parse_package_file($) {
+	my $packages = shift;
+
+	my $retval = [];
+	my $currpkg = {};
+
+	my $lastline = undef;
+	foreach my $line (split /^/, $packages) {
+		chomp $line;
+		# Doesn't parse the Description: field correctly, but then
+		# we're not here to check Description: fields, anyway
+		if($line =~ /^ .+/) {
+			# line continuation
+			die "invalid Packages file"
+				unless defined($lastline);
+			$line =~ s/^ //;
+			$lastline .= $line;
+		} elsif($line =~ /^\s*$/) {
+			# next stanza.
+			next unless defined($lastline);
+			my ($key, $value) = split /:/,$lastline,2;
+			$value =~ s/^ //;
+			$currpkg->{$key} = $value;
+			push @$retval, $currpkg;
+			$currpkg = {};
+			# can't have continuation as first line
+			# for a stanza, so undef lastline
+			$lastline = undef;
+		} else {
+			# next key
+			if(defined($lastline)) {
+				my ($key, $value) = split /:/,$lastline,2;
+				$value =~ s/^ //;
+				$currpkg->{$key} = $value;
+			}
+			$lastline = $line;
+		}
+	}
+	return $retval;
+}
+
+foreach my $repo(@debrepos) {
+	foreach my $arch('i386', 'amd64') {
+		$ua->set_x3_dist("${repo}-${arch}");
+		my $packurl = "${DEBURL}/dists/$repo/main/binary-$arch/Packages";
+		print STDERR "Trying to get $packurl\n";
+		my $req = HTTP::Request->new(GET => "${packurl}");
+		my $res = $ua->request($req);
+		if($res->is_success) {
+			my $p_str = $res->decoded_content();
+			my $parsed_repo = parse_package_file($p_str);
+			my $comment = "";
+			my $state = $states{OK};
+			$ua->show_progress(1);
+			my $sizes = [];
+			foreach my $package(@$parsed_repo) {
+				push @$sizes, $package->{"Size"};
+			}
+			$ua->set_x3_sizes($sizes);
+			my $i = 0;
+			foreach my $package(@$parsed_repo) {
+				$ua->set_x3_which($i++);
+				print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
+				my $fileurl = "${DEBURL}/" . $package->{Filename};
+				my $sha1 = $package->{SHA1};
+				my $freq = HTTP::Request->new(GET => "${fileurl}");
+				printresult("${repo}-${arch}", "state.comment", "downloading ${fileurl}");
+				my $fres = $ua->request($freq);
+				if($fres->is_success) {
+					my $digest = sha1_hex($fres->decoded_content());
+					if($digest ne $sha1) {
+						$state = $states{ALERT};
+						$comment = "$fileurl has SHA1 $digest rather than expected SHA1 $sha1";
+						last;
+					}
+				}
+				$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
+			}
+			$ua->show_progress(0);
+			printresult("${repo}-${arch}", "state.comment", $comment);
+			printresult("${repo}-${arch}", "state", $state);
+		} else {
+			printresult("${repo}-${arch}", "state", $states{ALERT});
+		}
+	}
+}
+
+# final newline to mention we're done for now.
+print "\n";
