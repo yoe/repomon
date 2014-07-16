@@ -24,6 +24,8 @@ use Digest::SHA qw(sha1_hex);
 package repomon::ua;
 our @ISA = "LWP::UserAgent";
 
+use Time::HiRes qw(gettimeofday tv_interval);
+
 sub set_x3_sizes() {
 	my $self = shift;
 	my $sizes = shift;
@@ -36,6 +38,7 @@ sub set_x3_sizes() {
 	}
 	$self->{x3_total_size} = $total;
 	$self->{x3_inc_sizes} = $inc;
+	$self->{x3_prev_st} = [0, 0];
 }
 
 sub set_x3_which() {
@@ -51,6 +54,7 @@ sub set_x3_dist() {
 sub progress() {
 	my $self = shift;
 	return unless defined($self->show_progress) && $self->show_progress > 0;
+	return unless tv_interval($self->{x3_prev_st}) > .1;
 	my $status = shift;
 	my $request_or_response = shift;
 	if($status eq "begin") {
@@ -64,6 +68,8 @@ sub progress() {
 	$status = $curloc / $self->{x3_total_size};
 	$status = int($status * 100);
 	main::printresult($self->{x3_dist}, "progress", $status);
+	$self->{x3_prev_st} = [gettimeofday()];
+	print "\n";
 }
 
 package main;
