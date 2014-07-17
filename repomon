@@ -19,7 +19,110 @@ use strict;
 use warnings;
 
 use LWP::UserAgent;
-use Digest::SHA qw(sha1_hex);
+use XML::SAX;
+use Digest::SHA qw(sha1_hex sha256_hex);
+
+package repomon::xmlparser;
+
+sub characters {
+	my ($self, $data) = @_;
+
+	if(exists($self->{cdata})) {
+		${$self->{cdata}} .= $data->{Data};
+	}
+}
+
+sub new {
+	my $class = shift;
+	my $self = {};
+
+	$self->{stanzas} = [];
+	$self->{stanza} = {};
+	$self->{stanzaname} = "";
+
+	bless $self, $class;
+}
+
+sub start_element {
+	my ($self, $el) = @_;
+	my $stanza = $self->{stanza};
+
+	if($el->{LocalName} eq "location") {
+		$stanza->{location} = $el->{Attributes}{"{}href"}{Value};
+	} elsif($el->{LocalName} eq "checksum") {
+		my $key = "checksum-" . $el->{Attributes}{"{}type"}{Value};
+		$stanza->{$key} = "";
+		$self->{cdata} = \$stanza->{$key};
+	}
+}
+
+sub end_element {
+	my ($self, $el) = @_;
+
+	if(exists($self->{cdata})) {
+		delete $self->{cdata};
+	}
+	if($el->{LocalName} eq $self->{stanzaname}) {
+		push @{$self->{stanzas}}, $self->{stanza};
+		$self->{stanza} = {};
+	}
+}
+
+sub getsizes {
+	my $self = shift;
+	my $retval = [];
+
+	foreach my $stanza(@{$self->{stanzas}}) {
+		push @$retval, $stanza->{size};
+	}
+
+	return $retval;
+}
+
+package repomon::mdparser;
+
+our @ISA = "repomon::xmlparser";
+
+sub new() {
+	my $class = shift;
+
+	my $self = $class->repomon::xmlparser::new($class);
+	$self->{stanzaname} = "data";
+
+	return $self;
+}
+
+sub start_element {
+	my ($self, $el) = @_;
+	my $stanza = $self->{stanza};
+
+	$self->repomon::xmlparser::start_element($el);
+
+	if($el->{LocalName} eq "size") {
+		$stanza->{size} = "";
+		$self->{cdata} = \$stanza->{size};
+	}
+}
+
+package repomon::prparser;
+
+our @ISA = "repomon::xmlparser";
+
+sub new() {
+	my $class = shift;
+
+	my $self = $class->repomon::xmlparser::new($class);
+	$self->{stanzaname} = "package";
+}
+
+sub start_element {
+	my ($self, $el) = @_;
+	my $stanza = $self->{stanza};
+
+	if($el->{LocalName} eq "size") {
+		$stanza->{size} = $el->{Attributes}{"{}package"}{Value}
+	}
+}
 
 package repomon::ua;
 our @ISA = "LWP::UserAgent";
@@ -44,11 +147,13 @@ sub set_x3_sizes() {
 sub set_x3_which() {
 	my $self = shift;
 	$self->{x3_which} = shift;
+	$self->{x3_prev_st} = [0, 0];
 }
 
 sub set_x3_dist() {
 	my $self = shift;
 	$self->{x3_dist} = shift;
+	$self->{x3_prev_st} = [0, 0];
 }
 
 sub progress() {
@@ -126,51 +231,98 @@ sub parse_package_file($) {
 	return $retval;
 }
 
-foreach my $repo(@debrepos) {
-	foreach my $arch('i386', 'amd64') {
-		$ua->set_x3_dist("${repo}-${arch}");
-		my $packurl = "${DEBURL}/dists/$repo/main/binary-$arch/Packages";
-		print STDERR "Trying to get $packurl\n";
-		my $req = HTTP::Request->new(GET => "${packurl}");
-		my $res = $ua->request($req);
-		if($res->is_success) {
-			my $p_str = $res->decoded_content();
-			my $parsed_repo = parse_package_file($p_str);
-			my $comment = "";
-			my $state = $states{OK};
-			$ua->show_progress(1);
-			my $sizes = [];
-			foreach my $package(@$parsed_repo) {
-				push @$sizes, $package->{"Size"};
+sub checkdeb() {
+	foreach my $repo(@debrepos) {
+		foreach my $arch('i386', 'amd64') {
+			$ua->set_x3_dist("${repo}-${arch}");
+			my $packurl = "${DEBURL}/dists/$repo/main/binary-$arch/Packages";
+			print STDERR "Trying to get $packurl\n";
+			my $req = HTTP::Request->new(GET => $packurl);
+			my $res = $ua->request($req);
+			if($res->is_success) {
+				my $p_str = $res->decoded_content();
+				my $parsed_repo = parse_package_file($p_str);
+				my $comment = "";
+				my $state = $states{OK};
+				$ua->show_progress(1);
+				my $sizes = [];
+				foreach my $package(@$parsed_repo) {
+					push @$sizes, $package->{"Size"};
+				}
+				$ua->set_x3_sizes($sizes);
+				my $i = 0;
+				foreach my $package(@$parsed_repo) {
+					$ua->set_x3_which($i++);
+					print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
+					my $fileurl = "${DEBURL}/" . $package->{Filename};
+					my $sha1 = $package->{SHA1};
+					my $freq = HTTP::Request->new(GET => "${fileurl}");
+					printresult("${repo}-${arch}", "state.comment", "downloading ${fileurl}");
+					my $fres = $ua->request($freq);
+					if($fres->is_success) {
+						my $digest = sha1_hex($fres->decoded_content());
+						if($digest ne $sha1) {
+							$state = $states{ALERT};
+							$comment = "$fileurl has SHA1 $digest rather than expected SHA1 $sha1";
+							last;
+						}
+					}
+					$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
+				}
+				$ua->show_progress(0);
+				printresult("${repo}-${arch}", "state.comment", $comment);
+				printresult("${repo}-${arch}", "state", $state);
+			} else {
+				printresult("${repo}-${arch}", "state", $states{ALERT});
 			}
-			$ua->set_x3_sizes($sizes);
-			my $i = 0;
-			foreach my $package(@$parsed_repo) {
-				$ua->set_x3_which($i++);
-				print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
-				my $fileurl = "${DEBURL}/" . $package->{Filename};
-				my $sha1 = $package->{SHA1};
-				my $freq = HTTP::Request->new(GET => "${fileurl}");
-				printresult("${repo}-${arch}", "state.comment", "downloading ${fileurl}");
-				my $fres = $ua->request($freq);
-				if($fres->is_success) {
-					my $digest = sha1_hex($fres->decoded_content());
-					if($digest ne $sha1) {
-						$state = $states{ALERT};
-						$comment = "$fileurl has SHA1 $digest rather than expected SHA1 $sha1";
-						last;
+		}
+	}
+
+	# final newline to mention we're done for now.
+	print "\n";
+}
+
+sub checkrpm() {
+	foreach my $repo(keys %rpmrepos) {
+		foreach my $vers(@{$rpmrepos{$repo}{vers}}) {
+			foreach my $arch(@{$rpmrepos{$repo}{arch}}) {
+				$ua->set_x3_dist("${repo}-${vers}-${arch}");
+				my $rpmbaseurl = "${RPMURL}/${repo}/${vers}/${arch}";
+				my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
+				my $req = HTTP::Request->new(GET => $mdurl);
+				my $res = $ua->request($req);
+				print $mdurl . "\n";
+				if($res->is_success) {
+					my $md_str = $res->decoded_content();
+					my $handler = repomon::mdparser->new();
+					my $parser = XML::SAX::ParserFactory->parser(Handler => $handler);
+					$parser->parse_string($md_str);
+					$ua->set_x3_sizes($handler->getsizes());
+					$ua->show_progress(1);
+					my $i = 0;
+					my $state = $states{OK};
+					my $comment = "";
+					foreach my $stanza(@{$handler->{stanzas}}) {
+						$ua->set_x3_which($i++);
+						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
+						my $freq = HTTP::Request->new(GET => $fileurl);
+						printresult("${repo}-${vers}-${arch}", "state.comment", "downloading $fileurl");
+						my $fres = $ua->request($freq);
+						if($fres->is_success) {
+							my $sha256 = $stanza->{"checksum-sha256"};
+							my $digest = sha256_hex($fres->decoded_content());
+							if($digest ne $sha256) {
+								$state = $states{ALERT};
+								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
+								last;
+							}
+						}
+						$comment .= $stanza->{location};
 					}
 				}
-				$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
 			}
-			$ua->show_progress(0);
-			printresult("${repo}-${arch}", "state.comment", $comment);
-			printresult("${repo}-${arch}", "state", $state);
-		} else {
-			printresult("${repo}-${arch}", "state", $states{ALERT});
 		}
 	}
 }
 
-# final newline to mention we're done for now.
-print "\n";
+checkrpm;
