@@ -113,6 +113,8 @@ sub new() {
 
 	my $self = $class->repomon::xmlparser::new($class);
 	$self->{stanzaname} = "package";
+
+	return $self;
 }
 
 sub start_element {
