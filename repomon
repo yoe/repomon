@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-#x3.out.filter=^be\.fedict\.eid\.ext\.middleware\.download\.linux\.([a-z0-9_-]+)\.(state|state\.comment)$
+#x3.out.filter=^be\.fedict\.eid\.ext\.middleware\.download\.linux\.([a-z0-9_-]+)\.(progress\.percentage|state|state\.comment)$
 
 my $BASEURL = 'http://files.eid.belgium.be/';
 my $DEBURL = "${BASEURL}debian/";
@@ -174,7 +174,7 @@ sub progress() {
 	my $curloc = $incsize + $fileloc;
 	$status = $curloc / $self->{x3_total_size};
 	$status = int($status * 100);
-	main::printresult($self->{x3_dist}, "progress", $status);
+	main::printresult($self->{x3_dist}, "progress.percentage", $status);
 	$self->{x3_prev_st} = [gettimeofday()];
 	print "\n";
 }
@@ -189,7 +189,7 @@ sub printresult($$$) {
 	my $sub = shift;
 	my $value = shift;
 
-	print "${RESULTPREFIX}.${dist}.${sub}= $value\n";
+	print "${RESULTPREFIX}.${dist}.${sub}=${value}\n";
 }
 
 sub parse_package_file($) {
@@ -293,7 +293,7 @@ sub checkrpm() {
 				my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
 				my $req = HTTP::Request->new(GET => $mdurl);
 				my $res = $ua->request($req);
-				print $mdurl . "\n";
+				print STDERR $mdurl . "\n";
 				if($res->is_success) {
 					my $md_str = $res->decoded_content();
 					my $handler = repomon::mdparser->new();
