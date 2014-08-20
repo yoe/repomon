@@ -288,7 +288,11 @@ sub checkrpm() {
 	foreach my $repo(keys %rpmrepos) {
 		foreach my $vers(@{$rpmrepos{$repo}{vers}}) {
 			foreach my $arch(@{$rpmrepos{$repo}{arch}}) {
-				$ua->set_x3_dist("${repo}-${vers}-${arch}");
+				my $dasharch = "";
+				if(length($arch) != 0) {
+					$dasharch = "-${arch}";
+				} 
+				$ua->set_x3_dist("${repo}-${vers}${dasharch}");
 				my $rpmbaseurl = "${RPMURL}/${repo}/${vers}/${arch}";
 				my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
 				my $req = HTTP::Request->new(GET => $mdurl);
@@ -308,7 +312,7 @@ sub checkrpm() {
 						$ua->set_x3_which($i++);
 						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
 						my $freq = HTTP::Request->new(GET => $fileurl);
-						printresult("${repo}-${vers}-${arch}", "state.comment", "downloading $fileurl");
+						printresult("${repo}-${vers}${dasharch}", "state.comment", "downloading $fileurl");
 						my $fres = $ua->request($freq);
 						if($fres->is_success) {
 							my $sha256 = $stanza->{"checksum-sha256"};
