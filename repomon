@@ -189,7 +189,7 @@ sub printresult($$$) {
 	my $sub = shift;
 	my $value = shift;
 
-	print "${RESULTPREFIX}.${dist}.${sub}: $value\n";
+	print "${RESULTPREFIX}.${dist}.${sub}= $value\n";
 }
 
 sub parse_package_file($) {
@@ -327,4 +327,13 @@ sub checkrpm() {
 	}
 }
 
-checkrpm;
+sub repomon() {
+    while(1) {
+        checkdeb;
+        sleep 5;
+        checkrpm;
+        sleep 5;
+    }
+}
+
+repomon;
