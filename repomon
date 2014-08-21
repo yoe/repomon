@@ -195,6 +195,7 @@ sub progress() {
 package main;
 
 my $ua = repomon::ua->new;
+$ua->timeout(10);
 $ua->env_proxy;
 
 sub printresult($$$) {
