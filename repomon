@@ -282,6 +282,10 @@ sub checkdeb() {
 							$comment = "$fileurl has SHA1 $digest rather than expected SHA1 $sha1";
 							last;
 						}
+					} else {
+						$comment = "could not download $fileurl";
+						$state = $states{ALERT};
+						last;
 					}
 					if($package->{Package} eq "eid-mw" || $package->{Package} eq "eid-viewer") {
 						$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
@@ -344,6 +348,10 @@ sub checkrpm() {
 							if($stanza->{"type"} eq "primary") {
 								$primarydata = \$content;
 							}
+						} else {
+							$comment = "could not download $fileurl";
+							$state = $states{ALERT};
+							last;
 						}
 					}
 					my $z = new IO::Uncompress::Gunzip($primarydata);
@@ -367,6 +375,10 @@ sub checkrpm() {
 								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
 								last;
 							}
+						} else {
+							$comment = "could not download $fileurl";
+							$state = $states{ALERT};
+							last;
 						}
 						if($stanza->{name} eq "eid-mw" || $stanza->{name} eq "eid-viewer") {
 							$comment .= $stanza->{name} . "-" . $stanza->{version} . "." . $stanza->{arch} . " ";
