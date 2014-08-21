@@ -250,6 +250,7 @@ sub checkdeb() {
 	foreach my $repo(@debrepos) {
 		foreach my $arch('i386', 'amd64') {
 			$ua->set_x3_dist("${repo}-${arch}");
+			printresult("${repo}-${arch}", "state", $states{WARNING});
 			my $packurl = "${DEBURL}/dists/$repo/main/binary-$arch/Packages";
 			print STDERR "Trying to get $packurl\n";
 			my $req = HTTP::Request->new(GET => $packurl);
@@ -307,6 +308,7 @@ sub checkrpm() {
 					$dasharch = "-${arch}";
 				} 
 				$ua->set_x3_dist("${repo}-${vers}${dasharch}");
+				printresult("${repo}-${vers}${dasharch}", "state", $states{WARNING});
 				my $rpmbaseurl = "${RPMURL}/${repo}/${vers}/${arch}";
 				my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
 				my $req = HTTP::Request->new(GET => $mdurl);
