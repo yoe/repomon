@@ -274,6 +274,7 @@ sub checkdeb() {
 					$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
 				}
 				$ua->show_progress(0);
+				printresult("${repo}-${arch}", "progress.percentage", "100");
 				printresult("${repo}-${arch}", "state.comment", $comment);
 				printresult("${repo}-${arch}", "state", $state);
 			} else {
