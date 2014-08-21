@@ -121,6 +121,8 @@ sub start_element {
 	my ($self, $el) = @_;
 	my $stanza = $self->{stanza};
 
+	$self->repomon::xmlparser::start_element($el);
+
 	if($el->{LocalName} eq "size") {
 		$stanza->{size} = $el->{Attributes}{"{}package"}{Value}
 	}
