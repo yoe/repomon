@@ -21,6 +21,7 @@ use warnings;
 use LWP::UserAgent;
 use XML::SAX;
 use Digest::SHA qw(sha1_hex sha256_hex);
+use IO::Uncompress::Gunzip;
 
 package repomon::xmlparser;
 
@@ -101,6 +102,8 @@ sub start_element {
 	if($el->{LocalName} eq "size") {
 		$stanza->{size} = "";
 		$self->{cdata} = \$stanza->{size};
+	} elsif($el->{LocalName} eq "data") {
+		$stanza->{type} = $el->{Attributes}{"{}type"}{Value};
 	}
 }
 
@@ -301,16 +304,18 @@ sub checkrpm() {
 				my $req = HTTP::Request->new(GET => $mdurl);
 				my $res = $ua->request($req);
 				print STDERR $mdurl . "\n";
+				my $comment = "";
+				my $state = $states{OK};
 				if($res->is_success) {
 					my $md_str = $res->decoded_content();
 					my $handler = repomon::mdparser->new();
 					my $parser = XML::SAX::ParserFactory->parser(Handler => $handler);
 					$parser->parse_string($md_str);
-					$ua->set_x3_sizes($handler->getsizes());
+					my $sizes = $handler->getsizes();
+					$ua->set_x3_sizes($sizes);
 					$ua->show_progress(1);
 					my $i = 0;
-					my $state = $states{OK};
-					my $comment = "";
+					my $primarydata;
 					foreach my $stanza(@{$handler->{stanzas}}) {
 						$ua->set_x3_which($i++);
 						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
@@ -319,16 +324,50 @@ sub checkrpm() {
 						my $fres = $ua->request($freq);
 						if($fres->is_success) {
 							my $sha256 = $stanza->{"checksum-sha256"};
-							my $digest = sha256_hex($fres->decoded_content());
+							my $content = $fres->decoded_content();
+							my $digest = sha256_hex($content);
+							if($digest ne $sha256) {
+								$state = $states{ALERT};
+								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
+								last;
+							}
+							if($stanza->{"type"} eq "primary") {
+								$primarydata = \$content;
+							}
+						}
+						$comment .= $stanza->{location};
+					}
+					my $z = new IO::Uncompress::Gunzip($primarydata);
+					my $prhandler = repomon::prparser->new();
+					my $prparser = XML::SAX::ParserFactory->parser(Handler => $prhandler);
+					$prparser->parse_file($z);
+					push @$sizes, @{$prhandler->getsizes()};
+					$ua->set_x3_sizes($sizes);
+					foreach my $stanza(@{$prhandler->{stanzas}}) {
+						$ua->set_x3_which($i++);
+						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
+						my $freq = HTTP::Request->new(GET => $fileurl);
+						printresult("${repo}-${vers}${dasharch}", "state.comment", "downloading $fileurl");
+						my $fres = $ua->request($freq);
+						if($fres->is_success) {
+							my $sha256 = $stanza->{"checksum-sha256"};
+							my $content = $fres->decoded_content();
+							my $digest = sha256_hex($content);
 							if($digest ne $sha256) {
 								$state = $states{ALERT};
 								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
 								last;
 							}
 						}
-						$comment .= $stanza->{location};
+						# TODO: GPG verification
 					}
+				} else {
+					$comment = "failed to download $mdurl";
+					$state = $states{ALERT};
 				}
+				printresult("${repo}-${vers}${dasharch}", "progress.percentage", "100");
+				printresult("${repo}-${vers}${dasharch}", "state", $state);
+				printresult("${repo}-${vers}${dasharch}", "state.comment", $comment);
 			}
 		}
 	}
