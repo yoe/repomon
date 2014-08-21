@@ -374,12 +374,11 @@ sub checkrpm() {
 }
 
 sub repomon() {
-    while(1) {
-        checkdeb;
-        sleep 5;
-        checkrpm;
-        sleep 5;
-    }
+	while(1) {
+		checkdeb;
+		checkrpm;
+		sleep 600;
+	}
 }
 
 repomon;
