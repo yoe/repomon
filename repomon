@@ -8,8 +8,8 @@ my $RESULTPREFIX='be.fedict.eid.ext.middleware.download.linux';
 
 my @debrepos = ( 'wheezy', 'trusty', 'precise', 'qiana', 'maya' );
 my %rpmrepos = (
-	'fedora'	=> { vers => [ 19, 20 ], arch => [ 'i386', 'x86_64' ], gpg => 'n' },
-	'epel'		=> { vers => [ 6 ], arch => ['i386', 'x86_64' ], gpg => 'n' },
+	'fedora'	=> { vers => [ 19, 20 ], arch => [ 'i386', 'x86_64', '' ], gpg => 'n' },
+	'epel'		=> { vers => [ 6 ], arch => ['i386', 'x86_64', '' ], gpg => 'n' },
 	'opensuse'	=> { vers => [ 131 ], arch => [ '' ], gpg => 'y' },
 );
 
