@@ -127,7 +127,15 @@ sub start_element {
 	$self->repomon::xmlparser::start_element($el);
 
 	if($el->{LocalName} eq "size") {
-		$stanza->{size} = $el->{Attributes}{"{}package"}{Value}
+		$stanza->{size} = $el->{Attributes}{"{}package"}{Value};
+	} elsif($el->{LocalName} eq "version") {
+		$stanza->{version} = $el->{Attributes}{"{}ver"}{Value} . "." . $el->{Attributes}{"{}rel"}{Value};
+	} elsif($el->{LocalName} eq "name") {
+		$stanza->{name} = "";
+		$self->{cdata} = \$stanza->{name};
+	} elsif($el->{LocalName} eq "arch") {
+		$stanza->{arch} = "";
+		$self->{cdata} = \$stanza->{arch};
 	}
 }
 
@@ -274,7 +282,9 @@ sub checkdeb() {
 							last;
 						}
 					}
-					$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
+					if($package->{Package} eq "eid-mw" || $package->{Package} eq "eid-viewer") {
+						$comment .= $package->{"Package"} . "_" . $package->{"Version"} . " ";
+					}
 				}
 				$ua->show_progress(0);
 				printresult("${repo}-${arch}", "progress.percentage", "100");
@@ -335,7 +345,6 @@ sub checkrpm() {
 								$primarydata = \$content;
 							}
 						}
-						$comment .= $stanza->{location};
 					}
 					my $z = new IO::Uncompress::Gunzip($primarydata);
 					my $prhandler = repomon::prparser->new();
@@ -358,6 +367,9 @@ sub checkrpm() {
 								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
 								last;
 							}
+						}
+						if($stanza->{name} eq "eid-mw" || $stanza->{name} eq "eid-viewer") {
+							$comment .= $stanza->{name} . "-" . $stanza->{version} . "." . $stanza->{arch} . " ";
 						}
 						# TODO: GPG verification
 					}
