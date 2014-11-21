@@ -23,6 +23,8 @@ use XML::SAX;
 use Digest::SHA qw(sha1_hex sha256_hex);
 use IO::Uncompress::Gunzip;
 
+my %checksums;
+
 package repomon::xmlparser;
 
 sub characters {
@@ -258,6 +260,9 @@ sub checkdeb() {
 			my $res = $ua->request($req);
 			if($res->is_success) {
 				my $p_str = $res->decoded_content();
+				my $shasum = sha1_hex($p_str);
+				next if(exists($main::checksums{$packurl} && $shasum eq $main::checksums{$packurl});
+				$main::checksums{$packurl} = $shasum;
 				my $parsed_repo = parse_package_file($p_str);
 				my $comment = "";
 				my $state = $states{OK};
@@ -323,6 +328,9 @@ sub checkrpm() {
 				my $state = $states{OK};
 				if($res->is_success) {
 					my $md_str = $res->decoded_content();
+					my $shasum = sha1_hex($md_str);
+					next if(exists($checksums{$mdurl}) && $shasum eq $checksums{$mdurl});
+					$checksums{$mdurl} = $shasum;
 					my $handler = repomon::mdparser->new();
 					my $parser = XML::SAX::ParserFactory->parser(Handler => $handler);
 					$parser->parse_string($md_str);
