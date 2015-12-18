@@ -362,7 +362,6 @@ sub checkdeb() {
 			$ua->set_x3_dist($debrepos{$repo} . ".${arch}");
 			printresult("${distcode}.${arch}", "state", $states{WARNING});
 			my $packurl = "${DEBURL}/dists/$REPOTYPE/$repo/main/binary-$arch/Packages";
-			#print STDERR "Trying to get $packurl\n";
 			my $req = HTTP::Request->new(GET => $packurl);
 			my $res = $ua->request($req);
 			my %seen;
@@ -391,7 +390,6 @@ sub checkdeb() {
 				my $i = 0;
 				foreach my $package(@$parsed_repo) {
 					$ua->set_x3_which($i++);
-					#print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
 					my $packvers = $package->{"Version"};
 					$packvers =~ s/[0-9]+\.[0-9]+\.[0-9]+v([^-]*).*$/$1/g;
 					my $sourcepackage = $packages{debian}{$package->{"Package"}}{source};
@@ -456,7 +454,6 @@ sub checkrpm() {
 			my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
 			my $req = HTTP::Request->new(GET => $mdurl);
 			my $res = $ua->request($req);
-			#print STDERR $mdurl . "\n";
 			my $comment = "";
 			my $state = $states{OK};
 			my %seen;
