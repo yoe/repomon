@@ -360,7 +360,6 @@ sub checkdeb() {
 		foreach my $arch('i386', 'amd64') {
 			my $distcode = $debrepos{$repo};
 			$ua->set_x3_dist($debrepos{$repo} . ".${arch}");
-			printresult("${distcode}.${arch}", "state", $states{WARNING});
 			my $packurl = "${DEBURL}/dists/$REPOTYPE/$repo/main/binary-$arch/Packages";
 			my $req = HTTP::Request->new(GET => $packurl);
 			my $res = $ua->request($req);
@@ -461,7 +460,6 @@ sub checkrpm() {
 			my $distcode = $repo . "." . $rpmrepos{$repo}{vers}{$vers}{name};
 
 			$ua->set_x3_dist($distcode);
-			printresult($distcode, "state", $states{WARNING});
 
 			foreach my $pack(keys %{$packages{$packstyle}}) {
 				if(exists($packages{$packstyle}{$pack}{countsource})) {
