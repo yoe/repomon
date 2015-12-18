@@ -1,16 +1,26 @@
 #!/usr/bin/perl -w
-#x3.out.filter=^be\.fedict\.eid\.ext\.middleware\.download\.linux\.([a-z0-9_-]+)\.(progress\.percentage|state|state\.comment)$
+#x3.out.filter=^be\.fedict\.eid\.ext\.middleware\.download\.linux\.([a-z0-9_.-]+)\.(progress\.percentage|state|state\.comment)$
 
 my $BASEURL = 'http://files.eid.belgium.be/';
 my $DEBURL = "${BASEURL}debian/";
 my $RPMURL = "${BASEURL}rpm/";
 my $RESULTPREFIX='be.fedict.eid.ext.middleware.download.linux';
 
-my @debrepos = ( 'wheezy', 'trusty', 'precise', 'qiana', 'maya' );
+my $REPOTYPE = "";
+
+my %debrepos = (
+	'wheezy' => 'debian.oldstable',
+	'jessie' => 'debian.stable',
+	'precise' => 'ubuntu.oldlts',
+	'trusty' => 'ubuntu.lts',
+	'wily' => 'ubuntu.stable',
+	'maya' => 'mint.oldstable',
+	'qiana' => 'mint.stable',
+);
 my %rpmrepos = (
-	'fedora'	=> { vers => [ 19, 20 ], arch => [ 'i386', 'x86_64', '' ], gpg => 'n' },
-	'epel'		=> { vers => [ 6 ], arch => ['i386', 'x86_64', '' ], gpg => 'n' },
-	'opensuse'	=> { vers => [ 131 ], arch => [ '' ], gpg => 'y' },
+	'fedora'	=> { vers => { 22 => 'oldstable', 23 => 'stable' }, gpg => 'n', packstyle => 'fedora', short => 'fc' },
+	'epel'		=> { vers => { 6 => 'oldstable', 7 => 'stable' }, gpg => 'n', packstyle => 'fedora', short => 'el' },
+	'opensuse'	=> { vers => { '13.2' => 'oldstable', '42.1' => 'stable' }, gpg => 'y', packstyle => 'suse' },
 );
 
 my %states = ( OK => 0, WARNING => 1, ALERT => 2, MISSING => 3 );
@@ -24,6 +34,50 @@ use Digest::SHA qw(sha1_hex sha256_hex);
 use IO::Uncompress::Gunzip;
 
 my %checksums;
+
+my %packages = (
+	'debian' => {
+		'eid-mw' => { source => 'eid-mw' },
+		'libbeidpkcs11-0' => { source => 'eid-mw' },
+		'libbeidpkcs11-dev' => { source => 'eid-mw' },
+		'libbeidpkcs11-bin' => { source => 'eid-mw' },
+		'libbeidpkcs11-dbg' => { source => 'eid-mw' },
+		'beid-mozilla-extension' => { source => 'eid-mw' },
+		'eid-viewer' => { source => 'eid-viewer', once => 1 },
+		'eid-archive' => { source => 'eid-archive', ignorevers => 1 , once => 1 },
+	},
+	'fedora' => {
+		'eid-mw' => { source => 'eid-mw' },
+		'eid-mw-libs' => { source => 'eid-mw' },
+		'eid-mw-devel' => { source => 'eid-mw' },
+		'eid-mw-debuginfo' => { source => 'eid-mw' },
+		'eid-mw-bin' => { source => 'eid-mw' },
+		'eid-viewer' => { source => 'eid-viewer', once => 1 },
+		'eid-archive-el' => { source => 'eid-archive', ignorevers => 1, countsource => 1 , once => 1 },
+		'eid-archive-fedora' => { source => 'eid-archive', ignorevers => 1, countsource => 1, once => 1 },
+	},
+	'suse' => {
+		'eid-mw' => { source => 'eid-mw' },
+		'eid-mw-libs' => { source => 'eid-mw' },
+		'eid-mw-devel' => { source => 'eid-mw' },
+		'eid-mw-bin' => { source => 'eid-mw' },
+		'eid-mw-bin-debuginfo' => { source => 'eid-mw', once => 1 },
+		'eid-mw-libs-32bit' => { source => 'eid-mw', once => 1 },
+		'eid-mw-libs-debuginfo-32bit' => { source => 'eid-mw', once => 1 },
+		'eid-mw-debugsource' => { source => 'eid-mw', once => 1 },
+		'eid-mw-debuginfo' => { source => 'eid-mw', once => 1 },
+		'eid-archive-suse' => { source => 'eid-archive', ignorevers => 1, once => 1 },
+		'eid-viewer' => { source => 'eid-viewer', once => 1 },
+	},
+);
+
+my %versions = ( );
+
+my %messages = (
+	'progress.percentage' => {},
+	'state' => {},
+	'state.comment' => {},
+);
 
 package repomon::xmlparser;
 
@@ -176,7 +230,7 @@ sub set_x3_dist() {
 sub progress() {
 	my $self = shift;
 	return unless defined($self->show_progress) && $self->show_progress > 0;
-	return unless tv_interval($self->{x3_prev_st}) > .1;
+	return unless tv_interval($self->{x3_prev_st}) > .5;
 	my $status = shift;
 	my $request_or_response = shift;
 	if($status eq "begin") {
@@ -196,14 +250,23 @@ sub progress() {
 
 package main;
 
-my $ua = repomon::ua->new;
-$ua->timeout(10);
+my $ua = repomon::ua->new();
+$ua->timeout(60);
 $ua->env_proxy;
 
 sub printresult($$$) {
 	my $dist = shift;
 	my $sub = shift;
 	my $value = shift;
+
+	if(defined($value)) {
+		$messages{$sub}{$dist} = $value;
+	} else {
+		if(!exists($messages{$sub}{$dist})) {
+			return;
+		}
+		$value = $messages{$sub}{$dist};
+	}
 
 	print "${RESULTPREFIX}.${dist}.${sub}=${value}\n";
 }
@@ -250,19 +313,29 @@ sub parse_package_file($) {
 }
 
 sub checkdeb() {
-	foreach my $repo(@debrepos) {
+	foreach my $repo(keys %debrepos) {
 		foreach my $arch('i386', 'amd64') {
-			$ua->set_x3_dist("${repo}-${arch}");
-			printresult("${repo}-${arch}", "state", $states{WARNING});
-			my $packurl = "${DEBURL}/dists/$repo/main/binary-$arch/Packages";
-			print STDERR "Trying to get $packurl\n";
+			my $distcode = $debrepos{$repo};
+			$ua->set_x3_dist($debrepos{$repo} . ".${arch}");
+			printresult("${distcode}.${arch}", "state", $states{WARNING});
+			my $packurl = "${DEBURL}/dists/$REPOTYPE/$repo/main/binary-$arch/Packages";
+			#print STDERR "Trying to get $packurl\n";
 			my $req = HTTP::Request->new(GET => $packurl);
 			my $res = $ua->request($req);
+			my %seen;
+			foreach my $pack(keys %{$packages{debian}}) {
+				$seen{$pack} = 0;
+			}
 			if($res->is_success) {
 				my $p_str = $res->decoded_content();
 				my $shasum = sha1_hex($p_str);
-				next if(exists($main::checksums{$packurl} && $shasum eq $main::checksums{$packurl});
-				$main::checksums{$packurl} = $shasum;
+				if(exists($checksums{$packurl}) && $shasum eq $checksums{$packurl}) {
+					printresult("$distcode.$arch", "progress.percentage", undef);
+					printresult("$distcode.$arch", "state", undef);
+					printresult("$distcode.$arch", "state.comment", undef);
+					next;
+				}
+				$checksums{$packurl} = $shasum;
 				my $parsed_repo = parse_package_file($p_str);
 				my $comment = "";
 				my $state = $states{OK};
@@ -275,11 +348,26 @@ sub checkdeb() {
 				my $i = 0;
 				foreach my $package(@$parsed_repo) {
 					$ua->set_x3_which($i++);
-					print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
+					#print STDERR "Package: " . $package->{"Package"} . ", version: " . $package->{"Version"} . "\n";
+					my $packvers = $package->{"Version"};
+					$packvers =~ s/[0-9]+\.[0-9]+\.[0-9]+v([^-]*).*$/$1/g;
+					my $sourcepackage = $packages{debian}{$package->{"Package"}}{source};
+					if(exists($versions{$sourcepackage})) {
+						if($packvers ne $versions{$sourcepackage}) {
+							$state = $states{WARNING};
+							$comment = "Package " . $package->{"Package"} . " has unexpected version number $packvers";
+							last;
+						}
+					} else {
+						if(!exists($packages{debian}{$package->{"Package"}}{ignorevers})) {
+							$versions{$sourcepackage} = $packvers;
+						}
+					}
+					$seen{$package->{"Package"}} = 1;
 					my $fileurl = "${DEBURL}/" . $package->{Filename};
 					my $sha1 = $package->{SHA1};
 					my $freq = HTTP::Request->new(GET => "${fileurl}");
-					printresult("${repo}-${arch}", "state.comment", "downloading ${fileurl}");
+					printresult("${distcode}.${arch}", "state.comment", "downloading ${fileurl}");
 					my $fres = $ua->request($freq);
 					if($fres->is_success) {
 						my $digest = sha1_hex($fres->decoded_content());
@@ -289,7 +377,7 @@ sub checkdeb() {
 							last;
 						}
 					} else {
-						$comment = "could not download $fileurl";
+						$comment = "could not download $fileurl: " . $fres->status_line;
 						$state = $states{ALERT};
 						last;
 					}
@@ -298,121 +386,181 @@ sub checkdeb() {
 					}
 				}
 				$ua->show_progress(0);
-				printresult("${repo}-${arch}", "progress.percentage", "100");
-				printresult("${repo}-${arch}", "state.comment", $comment);
-				printresult("${repo}-${arch}", "state", $state);
+				if($state == $states{OK}) {
+					foreach my $pack (keys %seen) {
+						if(!$seen{$pack}) {
+							$comment = "package $pack missing from index";
+							$state = $states{ALERT};
+							last;
+						}
+					}
+				}
+				printresult("${distcode}.${arch}", "progress.percentage", "100");
+				printresult("${distcode}.${arch}", "state.comment", $comment);
+				printresult("${distcode}.${arch}", "state", $state);
 			} else {
-				printresult("${repo}-${arch}", "state", $states{ALERT});
+				printresult("${distcode}.${arch}", "state.comment", "could not download $packurl");
+				printresult("${distcode}.${arch}", "state", $states{ALERT});
 			}
 		}
 	}
-
 }
 
 sub checkrpm() {
 	foreach my $repo(keys %rpmrepos) {
-		foreach my $vers(@{$rpmrepos{$repo}{vers}}) {
-			foreach my $arch(@{$rpmrepos{$repo}{arch}}) {
-				my $dasharch = "";
-				if(length($arch) != 0) {
-					$dasharch = "-${arch}";
-				} 
-				$ua->set_x3_dist("${repo}-${vers}${dasharch}");
-				printresult("${repo}-${vers}${dasharch}", "state", $states{WARNING});
-				my $rpmbaseurl = "${RPMURL}/${repo}/${vers}/${arch}";
-				my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
-				my $req = HTTP::Request->new(GET => $mdurl);
-				my $res = $ua->request($req);
-				print STDERR $mdurl . "\n";
-				my $comment = "";
-				my $state = $states{OK};
-				if($res->is_success) {
-					my $md_str = $res->decoded_content();
-					my $shasum = sha1_hex($md_str);
-					next if(exists($checksums{$mdurl}) && $shasum eq $checksums{$mdurl});
-					$checksums{$mdurl} = $shasum;
-					my $handler = repomon::mdparser->new();
-					my $parser = XML::SAX::ParserFactory->parser(Handler => $handler);
-					$parser->parse_string($md_str);
-					my $sizes = $handler->getsizes();
-					$ua->set_x3_sizes($sizes);
-					$ua->show_progress(1);
-					my $i = 0;
-					my $primarydata;
-					foreach my $stanza(@{$handler->{stanzas}}) {
-						$ua->set_x3_which($i++);
-						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
-						my $freq = HTTP::Request->new(GET => $fileurl);
-						printresult("${repo}-${vers}${dasharch}", "state.comment", "downloading $fileurl");
-						my $fres = $ua->request($freq);
-						if($fres->is_success) {
-							my $sha256 = $stanza->{"checksum-sha256"};
-							my $content = $fres->decoded_content();
-							my $digest = sha256_hex($content);
-							if($digest ne $sha256) {
-								$state = $states{ALERT};
-								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
-								last;
-							}
-							if($stanza->{"type"} eq "primary") {
-								$primarydata = \$content;
-							}
-						} else {
-							$comment = "could not download $fileurl";
-							$state = $states{ALERT};
-							last;
-						}
-					}
-					my $z = new IO::Uncompress::Gunzip($primarydata);
-					my $prhandler = repomon::prparser->new();
-					my $prparser = XML::SAX::ParserFactory->parser(Handler => $prhandler);
-					$prparser->parse_file($z);
-					push @$sizes, @{$prhandler->getsizes()};
-					$ua->set_x3_sizes($sizes);
-					foreach my $stanza(@{$prhandler->{stanzas}}) {
-						$ua->set_x3_which($i++);
-						my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
-						my $freq = HTTP::Request->new(GET => $fileurl);
-						printresult("${repo}-${vers}${dasharch}", "state.comment", "downloading $fileurl");
-						my $fres = $ua->request($freq);
-						if($fres->is_success) {
-							my $sha256 = $stanza->{"checksum-sha256"};
-							my $content = $fres->decoded_content();
-							my $digest = sha256_hex($content);
-							if($digest ne $sha256) {
-								$state = $states{ALERT};
-								$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
-								last;
-							}
-						} else {
-							$comment = "could not download $fileurl";
-							$state = $states{ALERT};
-							last;
-						}
-						if($stanza->{name} eq "eid-mw" || $stanza->{name} eq "eid-viewer") {
-							$comment .= $stanza->{name} . "-" . $stanza->{version} . "." . $stanza->{arch} . " ";
-						}
-						# TODO: GPG verification
-					}
+		foreach my $vers(keys %{$rpmrepos{$repo}{vers}}) {
+			my $rpmbaseurl = "${RPMURL}/${REPOTYPE}/${repo}/${vers}";
+			my $mdurl = "${rpmbaseurl}/repodata/repomd.xml";
+			my $req = HTTP::Request->new(GET => $mdurl);
+			my $res = $ua->request($req);
+			#print STDERR $mdurl . "\n";
+			my $comment = "";
+			my $state = $states{OK};
+			my %seen;
+			my $packstyle = $rpmrepos{$repo}{packstyle};
+			my $distcode = $repo . "." . $rpmrepos{$repo}{vers}{$vers};
+
+			$ua->set_x3_dist($distcode);
+			printresult($distcode, "state", $states{WARNING});
+
+			foreach my $pack(keys %{$packages{$packstyle}}) {
+				if(exists($packages{$packstyle}{$pack}{countsource})) {
+					$seen{$packages{$packstyle}{$pack}{source}} = 0;
 				} else {
-					$comment = "failed to download $mdurl";
-					$state = $states{ALERT};
+					$seen{$pack} = 0;
 				}
-				printresult("${repo}-${vers}${dasharch}", "progress.percentage", "100");
-				printresult("${repo}-${vers}${dasharch}", "state", $state);
-				printresult("${repo}-${vers}${dasharch}", "state.comment", $comment);
 			}
+			if($res->is_success) {
+				my $md_str = $res->decoded_content();
+				my $shasum = sha1_hex($md_str);
+				if(exists($checksums{$mdurl}) && $shasum eq $checksums{$mdurl}) {
+					printresult($distcode, "progress.percentage", undef);
+					printresult($distcode, "state", undef);
+					printresult($distcode, "state.comment", undef);
+					next;
+				}
+				$checksums{$mdurl} = $shasum;
+				my $handler = repomon::mdparser->new();
+				my $parser = XML::SAX::ParserFactory->parser(Handler => $handler);
+				$parser->parse_string($md_str);
+				my $sizes = $handler->getsizes();
+				$ua->set_x3_sizes($sizes);
+				$ua->show_progress(1);
+				my $i = 0;
+				my $primarydata;
+				foreach my $stanza(@{$handler->{stanzas}}) {
+					$ua->set_x3_which($i++);
+					my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
+					my $freq = HTTP::Request->new(GET => $fileurl);
+					printresult($distcode, "state.comment", "downloading $fileurl");
+					my $fres = $ua->request($freq);
+					if($fres->is_success) {
+						my $sha256 = $stanza->{"checksum-sha256"};
+						my $content = $fres->decoded_content();
+						my $digest = sha256_hex($content);
+						if($digest ne $sha256) {
+							$state = $states{ALERT};
+							$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
+							last;
+						}
+						if($stanza->{"type"} eq "primary") {
+							$primarydata = \$content;
+						}
+					} else {
+						$comment = "could not download $fileurl";
+						$state = $states{ALERT};
+						last;
+					}
+				}
+				my $z = new IO::Uncompress::Gunzip($primarydata);
+				my $prhandler = repomon::prparser->new();
+				my $prparser = XML::SAX::ParserFactory->parser(Handler => $prhandler);
+				$prparser->parse_file($z);
+				push @$sizes, @{$prhandler->getsizes()};
+				$ua->set_x3_sizes($sizes);
+				foreach my $stanza(@{$prhandler->{stanzas}}) {
+					$ua->set_x3_which($i++);
+					my $packvers = $stanza->{version};
+					my $short;
+					my $sourcepackage = $packages{$packstyle}{$stanza->{name}}{source};
+					my $fileurl = "${rpmbaseurl}/" . $stanza->{location};
+
+					if(exists($rpmrepos{$repo}{short})) {
+						$short =  "\\." . $rpmrepos{$repo}{short} . $vers;
+					} else {
+						$short = '';
+					}
+					$packvers =~ s/[0-9]+\.[0-9]+\.[0-9]+\.0\.v(.*)${short}$/$1/;
+					if(!exists($packages{$packstyle}{$stanza->{name}}{ignorevers})) {
+						next if($versions{$sourcepackage} ne $packvers);
+					}
+
+					printresult($distcode, "state.comment", "downloading $fileurl");
+					my $freq = HTTP::Request->new(GET => $fileurl);
+					my $fres = $ua->request($freq);
+
+					if($fres->is_success) {
+						my $sha256 = $stanza->{"checksum-sha256"};
+						my $content = $fres->decoded_content();
+						my $digest = sha256_hex($content);
+						if($digest ne $sha256) {
+							$state = $states{ALERT};
+							$comment = "$fileurl has SHA256 $digest rather than expected SHA256 $sha256";
+							last;
+						}
+						if(exists($packages{$packstyle}{$stanza->{name}}{countsource})) {
+							$seen{$sourcepackage}++;
+						} else {
+							$seen{$stanza->{name}}++;
+						}
+					} else {
+						$comment = "could not download $fileurl";
+						$state = $states{ALERT};
+						last;
+					}
+					if($stanza->{name} eq "eid-mw" || $stanza->{name} eq "eid-viewer") {
+						$comment .= $stanza->{name} . "-" . $stanza->{version} . "." . $stanza->{arch} . " ";
+					}
+					# TODO: GPG verification
+				}
+				foreach my $pack(keys %seen) {
+					if(exists($packages{$packstyle}{$pack}{once}) && $seen{$pack} < 1) {
+						$comment = "package $pack missing from index, or at wrong version";
+						$state = $states{ALERT};
+						last;
+					}
+					if($seen{$pack} < 2) {
+						$comment = "package $pack found once, needed at least twice";
+						$state = $states{ALERT};
+						last;
+					}
+				}
+			} else {
+				$comment = "failed to download $mdurl";
+				$state = $states{ALERT};
+			}
+			printresult($distcode, "progress.percentage", "100");
+			printresult($distcode, "state", $state);
+			printresult($distcode, "state.comment", $comment);
 		}
 	}
 }
 
 sub repomon() {
 	while(1) {
+		%versions = ();
 		checkdeb;
 		checkrpm;
 		# final newline to mention we're done for now.
 		print "\n";
-		sleep 600;
+        for(my $i=0; $i<10; $i++) {
+            sleep 60;
+            foreach my $sub(keys %messages) {
+                foreach my $dist(keys %{$messages{$sub}}) {
+                    printresult($dist, $sub, undef);
+                }
+            }
+        }
 	}
 }
 
